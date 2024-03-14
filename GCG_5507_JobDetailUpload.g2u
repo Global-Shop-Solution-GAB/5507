@@ -1,0 +1,172 @@
+Program.Sub.ScreenSU.Start
+Gui.JobDetailForm..Create
+Gui.JobDetailForm..Caption("Job Detail")
+Gui.JobDetailForm..Size(17235,7290)
+Gui.JobDetailForm..MinX(0)
+Gui.JobDetailForm..MinY(0)
+Gui.JobDetailForm..Position(0,0)
+Gui.JobDetailForm..FontName("Arial Black")
+Gui.JobDetailForm..BackColor(-2147483633)
+Gui.JobDetailForm..MousePointer(0)
+Gui.JobDetailForm.WONumLabel.Create(Label,"Work Order",True,1935,255,0,255,195,True,0,"Arial",8,-2147483633,0)
+Gui.JobDetailForm.WONumTxt.Create(TextBox,"",True,810,300,0,255,450,True,0,"Arial",8,-2147483643,1)
+Gui.JobDetailForm.WONumTxt.MaxLength(6)
+Gui.JobDetailForm.WOSuffixTxt.Create(TextBox,"",True,540,300,0,1260,450,True,0,"Arial",8,-2147483643,1)
+Gui.JobDetailForm.WOSuffixTxt.MaxLength(3)
+Gui.JobDetailForm.HyphenLabel.Create(Label,"-",True,195,255,0,1065,540,True,2,"Arial",8,-2147483633,0)
+Gui.JobDetailForm.SeqTxt.Create(TextBox,"",True,600,300,0,255,1305,True,0,"Arial",8,-2147483643,1)
+Gui.JobDetailForm.SeqTxt.MaxLength(6)
+Gui.JobDetailForm.SeqLabel.Create(Label,"Sequence",True,1935,255,0,255,1020,True,0,"Arial",8,-2147483633,0)
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+Program.External.Include.Library("UPLJOBDT.lib")
+V.Global.sCurrentProg.Declare(String)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.Try
+
+'Open the connection
+F.ODBC.Connection!con.OpenConnection(V.Ambient.PDSN, V.Ambient.PUser,V.Ambient.PPass)
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,"17261")
+	F.Intrinsic.Control.CallSub(CheckPOLines)
+	F.Intrinsic.Control.CallSub(cmd_Unload)
+F.Intrinsic.Control.Else
+	F.Intrinsic.Control.CallSub(cmd_Unload)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(errorhandler,"ErrNo",V.Ambient.ErrorNumber, "ErrDesc", V.Ambient.ErrorDescription, "Sub",V.Ambient.CurrentSubroutine)
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.CheckPOLines.Start
+F.Intrinsic.Control.Try
+	V.Local.sPO.Declare(String)
+	V.Local.sRecordNo.Declare(String)
+	V.Local.sJob.Declare(String)
+	V.Local.sSeq.Declare(String)
+	V.Local.sSQL.Declare(String)
+	V.Local.sSuffix.Declare(String)
+	V.Local.sRet.Declare(String)
+	V.Local.sLMO.Declare(String)
+	V.Local.sOperation.Declare(String)
+	V.Local.sDescription.Declare(String)
+	V.Local.sPart.Declare(String)
+	V.Local.sUM.Declare(String)
+	V.Local.fQtyCommit.Declare(Float)
+	V.Local.fAmountCommit.Declare(Float)
+	V.Local.fJobOpsUnitsCommit.Declare(Float)
+	V.Local.fJobOpsDollarsCommit.Declare(Float)
+	V.Local.dOperationDate.Declare(Date)
+	V.Local.sYYMMDDTodaysDate.Declare(String)
+	V.Local.sYYYYMMDDTodaysDate.Declare(String)
+	V.Local.sVendor.Declare(String)
+	
+	'sets the passed variables from hook 17261
+	V.Local.sJob.Set(V.Passed.009000)
+	V.Local.sSuffix.Set(V.Passed.009001)
+	
+	F.Intrinsic.String.Build("SELECT SEQ, OPERATION, LMO, UM, PART FROM JOB_OPERATIONS WHERE JOB = '{0}' AND SUFFIX = '{1}' AND FLAG_CLOSED <> 'Y'", v.Local.sJob, v.Local.sSuffix, V.Local.sSQL)
+	F.ODBC.Connection!con.OpenLocalRecordsetRO("rstJobSeq", V.Local.sSQL)
+	
+	
+	F.Intrinsic.Control.DoUntil(V.ODBC.con!rstJobSeq.EOF,=,True)
+		V.Local.sSeq.Set(V.ODBC.con!rstJobSeq.FieldVal!SEQ)
+		V.Local.sLMO.Set(V.ODBC.con!rstJobSeq.FieldVal!LMO)
+		V.Local.sOperation.Set(V.ODBC.con!rstJobSeq.FieldVal!OPERATION)
+		V.Local.sUM.Set(V.ODBC.con!rstJobSeq.FieldVal!UM)
+		
+		f.Intrinsic.Control.If(V.Local.sLMO,=,"M","AND",V.Local.sSeq,<,"900000")
+			F.Intrinsic.String.Build("SELECT * FROM V_PO_LINES WHERE JOB = '{0}' AND SUFFIX = '{1}' AND SEQUENCE = '{2}'", V.Local.sJob, V.Local.sSuffix, V.Local.sSeq, V.Local.sSQL)
+			F.ODBC.Connection!con.OpenLocalRecordsetRO("rstPO", V.Local.sSQL)
+			'checks to see if the job is tied to a purchase order
+			F.Intrinsic.Control.If(V.ODBC.con!rstPO.EOF,=,False)
+				V.Local.sPO.Set(V.ODBC.con!rstPO.FieldVal!PURCHASE_ORDER)
+				V.Local.sRecordNo.Set(V.ODBC.con!rstPO.FieldVal!RECORD_NO)	
+				F.Intrinsic.String.RPad(V.Local.sRecordNo,"0",3,V.Local.sRecordNo)
+				V.Local.sVendor.Set(V.ODBC.con!rstPO.FieldVal!VENDOR)
+				F.Intrinsic.String.Build("{0}-{1}", V.Local.sPO, V.Local.sRecordNo, V.Local.sPart)
+				
+				'Pulling the vendor name to be uploaded in the 'description' field on job_detail
+				F.Intrinsic.String.Build("SELECT NAME_VENDOR FROM V_VENDOR_MASTER WHERE VENDOR = '{0}'", V.Local.sVendor, V.Local.sSQL)
+				F.ODBC.Connection!con.OpenLocalRecordsetRO("rstVendor", V.Local.sSQL)
+				V.Local.sDescription.Set(V.ODBC.con!rstVendor.FieldVal!NAME_VENDOR)
+				F.ODBC.con!rstVendor.Close
+				
+				'calcultes the quantity committed
+				F.Intrinsic.Math.Sub(V.ODBC.con!rstPO.FieldVal!QTY_ALT_ORDER, v.ODBC.con!rstPO.FieldVal!QTY_RECV_ALT, V.Local.fQtyCommit)
+				F.Intrinsic.Math.Round(V.Local.fQtyCommit,4,V.Local.fQtyCommit)
+				'Calculates the amount committed
+				F.Intrinsic.Math.Mult(V.Local.fQtyCommit,V.ODBC.con!rstPO.FieldVal!INV_COST, V.Local.fAmountCommit)
+				F.Intrinsic.Math.Round(V.Local.fAmountCommit,2,V.Local.fAmountCommit)
+		
+				F.Intrinsic.UI.Msgbox("A purchase order already exists for this job sequence. Would you like to add a new job detail record?", "Information", 4, V.Local.sRet)
+				
+			'checks to see whether or not the user selected the yes button
+				F.Intrinsic.Control.If(V.Local.sRet,=,6)
+					V.Local.dOperationDate.Set(V.Ambient.Date)
+					F.Intrinsic.String.Format(V.Local.dOperationDate,"YYMMDD",V.Local.sYYMMDDTodaysDate)
+					F.Intrinsic.String.Format(V.Local.dOperationDate,"YYYYMMDD",V.Local.sYYYYMMDDTodaysDate)
+					
+					
+					'pulls the units_committed and dollars_committed to be added to with the new job detail quantities
+					F.Intrinsic.String.Build("SELECT UNITS_COMMITTED, DOLLARS_COMMITTED FROM JOB_OPERATIONS WHERE JOB = '{0}' AND SUFFIX = '{1}' AND SEQ = '{2}'",V.Local.sJob, V.Local.sSuffix, V.Local.sSeq, V.Local.sSQL)
+					F.ODBC.Connection!con.OpenLocalRecordsetRO("rstJobOps",V.Local.sSQL)
+					
+					F.Intrinsic.Control.If(V.ODBC.con!rstJobOps.EOF,=,False)
+						'Adds the neww job detail quanity committed and amount committed to the record that exists in job_operations
+						F.Intrinsic.Math.Add(V.Local.fQtyCommit, V.ODBC.con!rstJobOps.FieldVal!UNITS_COMMITTED, V.Local.fJobOpsUnitsCommit)
+						F.Intrinsic.Math.Round(V.Local.fJobOpsUnitsCommit,2,V.Local.fJobOpsUnitsCommit)
+						F.Intrinsic.Math.Add(V.Local.fAmountCommit, V.ODBC.con!rstJobOps.FieldVal!DOLLARS_COMMITTED, V.Local.fJobOpsDollarsCommit)
+						F.Intrinsic.Math.Round(V.Local.fJobOpsDollarsCommit,2,V.Local.fJobOpsDollarsCommit)
+					
+						'updates the units committed and dollars committed for the job
+						F.Intrinsic.String.Build("UPDATE JOB_OPERATIONS SET UNITS_COMMITTED = '{0}', DOLLARS_COMMITTED = '{1}' WHERE JOB = '{2}' AND SUFFIX = '{3}' AND SEQ = '{4}'", v.Local.fJobOpsUnitsCommit, v.Local.fJobOpsDollarsCommit, V.Local.sJob, V.Local.sSuffix, V.Local.sSeq, V.Local.sSQL)
+						F.ODBC.Connection!con.Execute(V.Local.sSQL)
+					F.Intrinsic.Control.EndIf
+					F.ODBC.con!rstJobOps.Close
+					
+					'adds a row to the datatable in UPLJOBDT
+					F.Data.DataTable.AddRow("UPLJOBDT","WONum",V.Local.sJob,"WOSuffix",V.Local.sSuffix,"WOSeq",V.Local.sSeq,"OperationDate",V.Local.sYYMMDDTodaysDate, "OpDesc", V.Local.sDescription, "Part",V.Local.sPart, "Reference",V.Local.sPO, "PartUM",V.Local.sUM, "LMOC",V.Local.sLMO, "CommittedQty",V.Local.fQtyCommit, "CommittedDollars", V.Local.fAmountCommit,"ChargeTaken",V.Local.sYYYYMMDDTodaysDate)
+					'calls UPLJOBDT
+					V.Global.bUPLJOBDTScreenless.Set("True")
+				   	F.Intrinsic.Control.CallSub(UPLJOBDTSync)
+				F.Intrinsic.Control.EndIf
+				
+			F.Intrinsic.Control.EndIf
+			
+			F.ODBC.con!rstPO.Close
+			
+		F.Intrinsic.Control.EndIf
+		
+		F.ODBC.con!rstJobSeq.MoveNext		
+	F.Intrinsic.Control.Loop
+	
+	F.ODBC.con!rstJobSeq.Close
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(errorhandler,"ErrNo",V.Ambient.ErrorNumber, "ErrDesc", V.Ambient.ErrorDescription, "Sub",V.Ambient.CurrentSubroutine)
+F.Intrinsic.Control.EndTry
+Program.Sub.CheckPOLines.End
+
+
+Program.Sub.cmd_Unload.Start
+F.Intrinsic.Control.Try
+	F.ODBC.Connection!con.Close
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(errorhandler,"ErrNo",V.Ambient.ErrorNumber, "ErrDesc", V.Ambient.ErrorDescription, "Sub",V.Ambient.CurrentSubroutine)
+F.Intrinsic.Control.EndTry
+Program.Sub.cmd_Unload.End
+
+Program.Sub.errorhandler.Start
+Variable.Local.sErrorMessage.Declare(String)
+	Function.Intrinsic.String.Build("Error Number: {0}{1}Sub{2}{1}Error Description: {3}{1}",V.Args.ErrNo,V.Ambient.NewLine,V.Args.Sub,V.Args.ErrDesc,Variable.Local.sErrorMessage) 	
+	Function.Intrinsic.UI.Msgbox(Variable.Local.sErrorMessage)
+Function.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(cmd_Unload)
+Function.Intrinsic.Control.EndTry
+Program.Sub.errorhandler.End
